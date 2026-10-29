@@ -3,6 +3,7 @@
 use std::{
     net::{IpAddr, SocketAddr},
     path::PathBuf,
+    str::FromStr,
     time::Duration,
 };
 
@@ -19,7 +20,6 @@ const PLAIN_DNS_PORT: u16 = 53;
 
 #[derive(Debug, Parser)]
 #[command(version, about = "DNS forwarder with a query dashboard")]
-#[group(id = "master_password", required = true, multiple = false)]
 pub struct Config {
     /// Address for DNS over UDP and TCP. `[::]` accepts IPv4 and IPv6.
     #[arg(long, env = "DNS_LISTEN", default_value = "[::]:53")]
@@ -31,12 +31,12 @@ pub struct Config {
 
     /// Master password for the dashboard. Prefer the environment variable: command-line
     /// arguments are visible to every user of the host.
-    #[arg(long, env = "DNS_PASSWORD", hide_env_values = true, value_parser = password, group = "master_password")]
+    #[arg(long, env = "DNS_PASSWORD", hide_env_values = true, value_parser = password, required_unless_present = "password_hash", conflicts_with = "password_hash")]
     pub password: Option<MasterPassword>,
 
     /// Argon2id hash of the master password in PHC format (`$argon2id$v=19$…`), instead of
     /// `DNS_PASSWORD`, so deployment files need not contain the password.
-    #[arg(long, env = "DNS_PASSWORD_HASH", hide_env_values = true, value_parser = MasterPassword::parse_argon2id, group = "master_password")]
+    #[arg(long, env = "DNS_PASSWORD_HASH", hide_env_values = true, value_parser = MasterPassword::parse_argon2id)]
     pub password_hash: Option<MasterPassword>,
 
     /// How long a dashboard login lasts.
@@ -44,14 +44,10 @@ pub struct Config {
     pub session_lifetime: Duration,
 
     /// Upstream resolvers, by IP: `udp://192.168.1.1`, `tls://9.9.9.9#dns.quad9.net`,
-    /// `https://1.1.1.1/dns-query#cloudflare-dns.com`. Repeat the flag or separate with commas.
-    #[arg(
-        long = "upstream",
-        env = "DNS_UPSTREAMS",
-        value_delimiter = ',',
-        required = true
-    )]
-    pub upstreams: Vec<UpstreamSpec>,
+    /// `https://1.1.1.1/dns-query#cloudflare-dns.com`. Repeat the flag or separate with commas
+    /// or newlines.
+    #[arg(long = "upstream", env = "DNS_UPSTREAMS", value_parser = list_of(parse::<UpstreamSpec>), required = true)]
+    upstreams: Vec<ListOf<UpstreamSpec>>,
 
     /// How long to wait for one upstream before trying the next.
     #[arg(long, env = "DNS_UPSTREAM_TIMEOUT", default_value = "2s", value_parser = positive_duration)]
@@ -84,21 +80,21 @@ pub struct Config {
     pub cache_max_negative_ttl: Duration,
 
     /// Lists of domains to block, as HTTP(S) URLs or file paths, in hosts, plain domain or
-    /// adblock (`||domain^`) format. Repeat the flag or separate with commas.
-    #[arg(long = "blocklist", env = "DNS_BLOCKLISTS", value_delimiter = ',')]
-    pub blocklists: Vec<ListLocation>,
+    /// adblock (`||domain^`) format. Repeat the flag or separate with commas or newlines.
+    #[arg(long = "blocklist", env = "DNS_BLOCKLISTS", value_parser = list_of(parse::<ListLocation>))]
+    blocklists: Vec<ListOf<ListLocation>>,
 
     /// Lists of domains that are never blocked, in the same formats as blocklists.
-    #[arg(long = "allowlist", env = "DNS_ALLOWLISTS", value_delimiter = ',')]
-    pub allowlists: Vec<ListLocation>,
+    #[arg(long = "allowlist", env = "DNS_ALLOWLISTS", value_parser = list_of(parse::<ListLocation>))]
+    allowlists: Vec<ListOf<ListLocation>>,
 
     /// Single domains to block, in addition to the blocklists.
-    #[arg(long = "blocked-domain", env = "DNS_BLOCKED_DOMAINS", value_delimiter = ',', value_parser = domain)]
-    pub blocked_domains: Vec<Box<str>>,
+    #[arg(long = "blocked-domain", env = "DNS_BLOCKED_DOMAINS", value_parser = list_of(domain))]
+    blocked_domains: Vec<ListOf<Box<str>>>,
 
     /// Single domains that are never blocked, in addition to the allowlists.
-    #[arg(long = "allowed-domain", env = "DNS_ALLOWED_DOMAINS", value_delimiter = ',', value_parser = domain)]
-    pub allowed_domains: Vec<Box<str>>,
+    #[arg(long = "allowed-domain", env = "DNS_ALLOWED_DOMAINS", value_parser = list_of(domain))]
+    allowed_domains: Vec<ListOf<Box<str>>>,
 
     /// How often lists from URLs are downloaded again.
     #[arg(long, env = "DNS_BLOCKLIST_REFRESH_INTERVAL", default_value = "1day", value_parser = positive_duration)]
@@ -140,13 +136,17 @@ pub struct Config {
 impl Config {
     pub fn blocking(&self) -> BlockingConfig {
         BlockingConfig {
-            blocklists: self.blocklists.clone(),
-            allowlists: self.allowlists.clone(),
-            blocked_domains: self.blocked_domains.clone(),
-            allowed_domains: self.allowed_domains.clone(),
+            blocklists: flatten(&self.blocklists),
+            allowlists: flatten(&self.allowlists),
+            blocked_domains: flatten(&self.blocked_domains),
+            allowed_domains: flatten(&self.allowed_domains),
             cache_dir: self.blocklist_cache_dir.clone(),
             refresh_interval: self.blocklist_refresh_interval,
         }
+    }
+
+    pub fn upstreams(&self) -> Vec<UpstreamSpec> {
+        flatten(&self.upstreams)
     }
 
     pub fn master_password(&self) -> MasterPassword {
@@ -188,19 +188,95 @@ fn password(text: &str) -> Result<MasterPassword, String> {
     Ok(MasterPassword::Plain(text.into()))
 }
 
+/// The values of one flag or variable. Commas or newlines separate them, so long lists can
+/// be written one per line, e.g. in a Compose `|` block; blank lines are skipped.
+#[derive(Debug, Clone)]
+struct ListOf<T>(Vec<T>);
+
+fn list_of<T: 'static>(
+    parse_item: fn(&str) -> Result<T, String>,
+) -> impl Fn(&str) -> Result<ListOf<T>, String> + Clone + Send + Sync + 'static {
+    move |text| {
+        text.split([',', '\n'])
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(parse_item)
+            .collect::<Result<_, _>>()
+            .map(ListOf)
+    }
+}
+
+fn flatten<T: Clone>(lists: &[ListOf<T>]) -> Vec<T> {
+    lists
+        .iter()
+        .flat_map(|list| list.0.iter().cloned())
+        .collect()
+}
+
+fn parse<T: FromStr<Err = String>>(text: &str) -> Result<T, String> {
+    text.parse()
+}
+
 fn domain(text: &str) -> Result<Box<str>, String> {
     parse_domain(text.trim()).ok_or_else(|| format!("{text:?} is not a valid domain name"))
 }
 
 #[cfg(test)]
 mod tests {
-    use clap::CommandFactory;
+    use clap::{CommandFactory, FromArgMatches};
 
     use super::*;
+
+    /// Parses only `arguments`, ignoring `DNS_*` variables of the environment the tests run in.
+    fn parse_arguments<'a>(
+        arguments: impl IntoIterator<Item = &'a str>,
+    ) -> Result<Config, clap::Error> {
+        let command = Config::command().mut_args(|argument| argument.env(None));
+        Config::from_arg_matches(&command.try_get_matches_from(arguments)?)
+    }
 
     #[test]
     fn flag_definitions_are_consistent() {
         Config::command().debug_assert();
+    }
+
+    #[test]
+    fn lists_are_separated_by_commas_or_newlines() {
+        let config = parse_arguments([
+            "server",
+            "--password",
+            "secret",
+            "--upstream",
+            "udp://192.0.2.1\n  tls://192.0.2.2#dns.example\n\n",
+            "--upstream",
+            "192.0.2.3,192.0.2.4",
+        ])
+        .unwrap();
+
+        let upstreams: Vec<String> = config.upstreams().iter().map(ToString::to_string).collect();
+        assert_eq!(
+            upstreams,
+            [
+                "udp://192.0.2.1:53",
+                "tls://192.0.2.2:853#dns.example",
+                "udp://192.0.2.3:53",
+                "udp://192.0.2.4:53"
+            ]
+        );
+    }
+
+    #[test]
+    fn exactly_one_master_password_is_required() {
+        let with = |password: &[&str]| {
+            let arguments = ["server", "--upstream", "192.0.2.1"];
+            parse_arguments(arguments.into_iter().chain(password.iter().copied()))
+        };
+        let hash = "$argon2id$v=19$m=64,t=1,p=1$SAVx/efSrm2ZlPSv8Z8t9w$wnr64EUDg64wy7VVK5RN48tk5bXeFYiMTMY5lu1PVuA";
+
+        assert!(with(&["--password", "secret"]).is_ok());
+        assert!(with(&["--password-hash", hash]).is_ok());
+        assert!(with(&["--password", "secret", "--password-hash", hash]).is_err());
+        assert!(with(&[]).is_err());
     }
 
     #[test]

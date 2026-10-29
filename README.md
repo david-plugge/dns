@@ -29,9 +29,18 @@ Open <http://127.0.0.1:8053>. For dashboard development with hot reload, run
 Every setting is a command-line flag or the matching environment variable; there is no
 configuration file. `server --help` lists all of them with their defaults.
 
+Variables holding several values take them separated by commas or newlines, so long lists can
+be written one per line, e.g. in Compose:
+
+```yaml
+DNS_BLOCKLISTS: |
+  https://big.oisd.nl
+  https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.txt
+```
+
 | Variable | Default | |
 |---|---|---|
-| `DNS_UPSTREAMS` | – (required) | Comma-separated upstreams, see below |
+| `DNS_UPSTREAMS` | – (required) | Upstreams, see below |
 | `DNS_PASSWORD` | – | Master password for the dashboard; this or `DNS_PASSWORD_HASH` is required |
 | `DNS_PASSWORD_HASH` | – | Argon2id hash of the master password (PHC format), so deployment files need not hold the password |
 | `DNS_SESSION_LIFETIME` | `7days` | How long a dashboard login lasts |
@@ -43,8 +52,8 @@ configuration file. `server --help` lists all of them with their defaults.
 | `DNS_CACHE_SIZE` | `10000` | Cached responses; `0` disables the cache |
 | `DNS_CACHE_MIN_TTL` / `DNS_CACHE_MAX_TTL` | `0s` / `1day` | Bounds for positive responses |
 | `DNS_CACHE_MAX_NEGATIVE_TTL` | `1h` | Bound for NXDOMAIN and empty responses |
-| `DNS_BLOCKLISTS` | – | Comma-separated lists to block, see below |
-| `DNS_ALLOWLISTS` | – | Comma-separated lists that are never blocked |
+| `DNS_BLOCKLISTS` | – | Lists to block, see below |
+| `DNS_ALLOWLISTS` | – | Lists that are never blocked |
 | `DNS_BLOCKED_DOMAINS` / `DNS_ALLOWED_DOMAINS` | – | Single domains to block or allow |
 | `DNS_BLOCKLIST_REFRESH_INTERVAL` | `1day` | How often lists from URLs are downloaded again |
 | `DNS_BLOCKLIST_CACHE_DIR` | `/data/blocklists` | Downloaded lists, used right after a restart |

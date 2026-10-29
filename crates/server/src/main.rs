@@ -56,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
     let query_reader = Arc::new(QueryReader::new(database.try_clone()?));
     let (query_writer, query_recorder) = QueryWriter::spawn(database, config.query_log_retention);
     let upstreams = Arc::new(UpstreamPool::new(
-        config.upstreams.clone(),
+        config.upstreams(),
         config.upstream_timeout,
     ));
     let local_resolver = config
@@ -92,7 +92,7 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("could not bind DNS over TCP to {}", config.dns_listen))?;
     dns_server.register_socket(udp);
     dns_server.register_listener(tcp, TCP_TIMEOUT, TCP_RESPONSE_BUFFER);
-    let upstream_names: Vec<_> = config.upstreams.iter().map(ToString::to_string).collect();
+    let upstream_names: Vec<_> = config.upstreams().iter().map(ToString::to_string).collect();
     info!(
         listen = %config.dns_listen,
         upstreams = ?upstream_names,
