@@ -32,7 +32,9 @@ RUN arch="$(uname -m)" \
     && dx --version
 WORKDIR /src
 COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+# Locked: the dashboard and per-architecture server builds run in parallel and would
+# otherwise unpack crates over each other.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/target,id=dashboard-target \
     dx build --release --web -p dashboard --debug-symbols false \
     && cp -r target/dx/dashboard/release/web/public /dashboard
@@ -60,7 +62,9 @@ RUN case "$TARGETARCH" in \
     && echo "$triple" > /target-triple
 WORKDIR /src
 COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+# Locked: the dashboard and per-architecture server builds run in parallel and would
+# otherwise unpack crates over each other.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/target,id=server-target-$TARGETARCH \
     triple="$(cat /target-triple)" \
     && cargo build --release --locked -p server --target "$triple" \
