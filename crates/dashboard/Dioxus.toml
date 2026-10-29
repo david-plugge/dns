@@ -1,0 +1,6 @@
+[web.app]
+title = "DNS Dashboard"
+
+# `dx serve` forwards API calls to a locally running server.
+[[web.proxy]]
+backend = "http://127.0.0.1:8053/api/"

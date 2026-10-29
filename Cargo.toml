@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = ["crates/api", "crates/dashboard", "crates/server"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+api = { path = "crates/api" }
+serde = { version = "1", features = ["derive"] }
+
+# Only the server: stripping the dashboard's wasm would remove the sections wasm-bindgen needs.
+[profile.release.package.server]
+strip = true
+
+# `dx build --release --web` builds the dashboard with this profile. No `strip`, since
+# wasm-bindgen needs the custom sections it would remove.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1

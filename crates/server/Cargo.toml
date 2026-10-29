@@ -1,0 +1,34 @@
+[package]
+name = "server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+api.workspace = true
+serde.workspace = true
+anyhow = "1"
+axum = "0.8"
+hickory-proto = "0.26"
+hickory-server = "0.26"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.7", features = ["fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-trait = "0.1.92"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+humantime = "2.4.0"
+moka = { version = "0.12.16", features = ["future"] }
+hickory-net = { version = "0.26", features = ["tls-ring", "https-ring", "webpki-roots"] }
+rustls-pki-types = "1.15.1"
+futures-util = "0.3.34"
+# 0.15 with foldhash is already in the dependency tree (via duckdb); 0.17 would add foldhash 0.2.
+hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
+duckdb = { version = "1.20000.1", features = ["bundled"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "gzip"] }
+subtle = "2.6"
+getrandom = "0.3"
+prometheus-client = "0.25.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util", "macros", "rt"] }

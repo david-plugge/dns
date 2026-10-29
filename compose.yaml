@@ -1,0 +1,14 @@
+# Example deployment. Settings go into `.env` next to this file, at least DNS_UPSTREAMS and
+# DNS_PASSWORD; see the README for all of them.
+services:
+  dns:
+    image: ghcr.io/david-plugge/dns:latest
+    restart: unless-stopped
+    env_file: .env
+    # Host networking serves IPv6 without Docker IPv6 setup and keeps the real client addresses.
+    network_mode: host
+    volumes:
+      - dns-data:/data
+
+volumes:
+  dns-data:
