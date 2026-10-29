@@ -32,7 +32,8 @@ configuration file. `server --help` lists all of them with their defaults.
 | Variable | Default | |
 |---|---|---|
 | `DNS_UPSTREAMS` | – (required) | Comma-separated upstreams, see below |
-| `DNS_PASSWORD` | – (required) | Master password for the dashboard |
+| `DNS_PASSWORD` | – | Master password for the dashboard; this or `DNS_PASSWORD_HASH` is required |
+| `DNS_PASSWORD_HASH` | – | Argon2id hash of the master password (PHC format), so deployment files need not hold the password |
 | `DNS_SESSION_LIFETIME` | `7days` | How long a dashboard login lasts |
 | `DNS_LISTEN` | `[::]:53` | DNS over UDP and TCP; `[::]` accepts IPv4 and IPv6 |
 | `DNS_HTTP_LISTEN` | `[::]:8053` | Dashboard and HTTP API |
@@ -79,9 +80,16 @@ through the configured upstreams, not the system resolver.
 
 ## Dashboard login and metrics
 
-The dashboard and `/api/*` require logging in with `DNS_PASSWORD`. Sessions are kept in
+The dashboard and `/api/*` require logging in with the master password. Sessions are kept in
 memory, so a restart logs everyone out; failed logins are slowed down to about one per
 second. `/health` and `/metrics` stay open.
+
+To keep the password out of deployment files, set `DNS_PASSWORD_HASH` instead, e.g. created
+with the `argon2` CLI (in Compose files, write every `$` as `$$`):
+
+```sh
+printf '%s' "$PASSWORD" | argon2 "$(openssl rand -base64 16)" -id -e
+```
 
 API errors are JSON `{"code": "...", "message": "..."}`. The code is stable (e.g.
 `session_required`, `wrong_password`, `query_store_failed`), so clients branch on it; the

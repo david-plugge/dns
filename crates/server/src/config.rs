@@ -9,6 +9,7 @@ use std::{
 use clap::Parser;
 
 use crate::{
+    auth::MasterPassword,
     blocking::{BlockingConfig, ListLocation, parse_domain},
     cache::{InvalidTtlBounds, TtlBounds},
     upstream::UpstreamSpec,
@@ -18,6 +19,7 @@ const PLAIN_DNS_PORT: u16 = 53;
 
 #[derive(Debug, Parser)]
 #[command(version, about = "DNS forwarder with a query dashboard")]
+#[group(id = "master_password", required = true, multiple = false)]
 pub struct Config {
     /// Address for DNS over UDP and TCP. `[::]` accepts IPv4 and IPv6.
     #[arg(long, env = "DNS_LISTEN", default_value = "[::]:53")]
@@ -29,8 +31,13 @@ pub struct Config {
 
     /// Master password for the dashboard. Prefer the environment variable: command-line
     /// arguments are visible to every user of the host.
-    #[arg(long, env = "DNS_PASSWORD", hide_env_values = true, value_parser = password)]
-    pub password: String,
+    #[arg(long, env = "DNS_PASSWORD", hide_env_values = true, value_parser = password, group = "master_password")]
+    pub password: Option<MasterPassword>,
+
+    /// Argon2id hash of the master password in PHC format (`$argon2id$v=19$…`), instead of
+    /// `DNS_PASSWORD`, so deployment files need not contain the password.
+    #[arg(long, env = "DNS_PASSWORD_HASH", hide_env_values = true, value_parser = MasterPassword::parse_argon2id, group = "master_password")]
+    pub password_hash: Option<MasterPassword>,
 
     /// How long a dashboard login lasts.
     #[arg(long, env = "DNS_SESSION_LIFETIME", default_value = "7days", value_parser = positive_duration)]
@@ -142,6 +149,13 @@ impl Config {
         }
     }
 
+    pub fn master_password(&self) -> MasterPassword {
+        self.password
+            .clone()
+            .or_else(|| self.password_hash.clone())
+            .expect("clap requires DNS_PASSWORD or DNS_PASSWORD_HASH")
+    }
+
     pub fn cache_ttl_bounds(&self) -> Result<TtlBounds, InvalidTtlBounds> {
         TtlBounds::new(
             self.cache_min_ttl,
@@ -167,11 +181,11 @@ fn positive_duration(text: &str) -> Result<Duration, String> {
     Ok(duration)
 }
 
-fn password(text: &str) -> Result<String, String> {
+fn password(text: &str) -> Result<MasterPassword, String> {
     if text.is_empty() {
         return Err("the password must not be empty".to_owned());
     }
-    Ok(text.to_owned())
+    Ok(MasterPassword::Plain(text.into()))
 }
 
 fn domain(text: &str) -> Result<Box<str>, String> {

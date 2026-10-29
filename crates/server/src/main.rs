@@ -106,7 +106,7 @@ async fn main() -> anyhow::Result<()> {
     let app = http::router(
         http::AppState {
             auth: Arc::new(Authenticator::new(
-                &config.password,
+                config.master_password(),
                 config.session_lifetime,
             )),
             query_reader,
