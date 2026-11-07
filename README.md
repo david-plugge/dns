@@ -24,6 +24,46 @@ dig @127.0.0.1 -p 5300 example.com
 Open <http://127.0.0.1:8053>. For dashboard development with hot reload, run
 `mise exec -- dx serve -p dashboard --port 8055` next to the server; it proxies `/api` to port 8053.
 
+## Dashboard UI
+
+The dashboard uses source-owned [Dioxus Components](https://dioxuslabs.github.io/dioxus-components/)
+with local CSS modules; no Node or Tailwind build is required. Component provenance and update
+notes are in [`crates/dashboard/src/components/README.md`](crates/dashboard/src/components/README.md).
+Layout, chart colors and the dark theme are customized in `crates/dashboard/assets/main.css`.
+
+The selected 1h/24h/7d period applies to statistics, queries and observed clients. Counters,
+chart legends and top lists open a filtered query snapshot. Query details show recorded data,
+not a re-evaluation of today's rules. Pausing the live log freezes only the displayed query
+view; DNS service and filtering continue. Paging uses the same server-derived time cutoff,
+but late log writes and retention can still affect subsequent pages.
+
+Filters, period, page and a frozen log's cutoff are kept in the URL, not browser storage.
+These URLs contain client addresses and domain searches; treat shared links accordingly.
+The client filter suggests observed devices by name or IP and shows both after selection.
+Enter a full device name and press Enter, or choose a suggestion; duplicate names require
+selecting a specific IP. Typed IP addresses are applied on Enter or when the field loses focus.
+Shared URLs retain the IP rather than the device name.
+The client inventory is derived from retained queries (up to 1,000 addresses per selected
+period), so it is not permanent and cannot identify devices hidden behind a forwarding router.
+
+Client naming uses the configured local resolver; filtering rules and list sources remain
+deployment-managed. **Refresh lists** reloads
+existing sources and updates the existing list cache without editing configuration. A failed
+download can leave previously loaded rules active; the list table reports retained rules and
+errors separately. No new persistent state or configuration store is introduced.
+
+The optional browser regressions require Node.js and Playwright with Chromium. They check
+stable filter layout, sequential IP entry, combined filters, and URL history:
+
+```sh
+export DNS_DASHBOARD_URL=http://127.0.0.1:18153
+export DNS_PASSWORD='<local-dashboard-password>'
+node crates/dashboard/tests/filter-layout.cjs
+node crates/dashboard/tests/client-filters.cjs
+```
+
+Set `PLAYWRIGHT_MODULE` to the module path if Playwright is installed outside Node's search path.
+
 ## Configuration
 
 Every setting is a command-line flag or the matching environment variable; there is no

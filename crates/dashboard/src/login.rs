@@ -2,7 +2,14 @@
 
 use dioxus::prelude::*;
 
-use crate::api_client::{self, LoginError};
+use crate::{
+    api_client::{self, LoginError},
+    components::{
+        button::Button,
+        card::{Card, CardContent, CardDescription, CardHeader, CardTitle},
+        input::Input,
+    },
+};
 
 #[component]
 pub fn LoginForm(on_login: EventHandler<()>) -> Element {
@@ -25,21 +32,44 @@ pub fn LoginForm(on_login: EventHandler<()>) -> Element {
     };
 
     rsx! {
-        form { class: "panel login", onsubmit: submit,
-            h2 { "Log in" }
-            input {
-                r#type: "password",
-                placeholder: "Password",
-                "aria-label": "Password",
-                autofocus: true,
-                value: "{password}",
-                oninput: move |event| password.set(event.value()),
+        Card { class: "login",
+            CardHeader {
+                CardTitle {
+                    h1 { "Welcome back" }
+                }
+                CardDescription { "Log in to your DNS dashboard." }
             }
-            button { r#type: "submit", disabled: pending() || password().is_empty(), "Log in" }
-            match error() {
-                None => rsx! {},
-                Some(LoginError::WrongPassword) => rsx! { p { class: "failed", role: "alert", "Wrong password" } },
-                Some(LoginError::Failed(message)) => rsx! { p { class: "failed", role: "alert", "{message}" } },
+            CardContent {
+                form { onsubmit: submit,
+                    label { r#for: "password", "Master password" }
+                    Input {
+                        id: "password",
+                        r#type: "password",
+                        autocomplete: "current-password",
+                        placeholder: "Enter your password",
+                        "autofocus": true,
+                        value: "{password}",
+                        oninput: move |event: FormEvent| password.set(event.value()),
+                    }
+                    Button {
+                        r#type: "submit",
+                        disabled: pending() || password().is_empty(),
+                        if pending() {
+                            "Logging in…"
+                        } else {
+                            "Log in"
+                        }
+                    }
+                    match error() {
+                        None => rsx! {},
+                        Some(LoginError::WrongPassword) => rsx! {
+                            p { class: "failed", role: "alert", "Wrong password" }
+                        },
+                        Some(LoginError::Failed(message)) => rsx! {
+                            p { class: "failed", role: "alert", "{message}" }
+                        },
+                    }
+                }
             }
         }
     }

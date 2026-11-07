@@ -3,8 +3,8 @@
 use std::{net::IpAddr, sync::Mutex, time::SystemTime};
 
 use api::{
-    AnswerSource, ClientCount, DomainCount, ErrorReport, QueryLogEntry, QueryOutcome, QueryPage,
-    Stats, StatsWindow, TimelineBucket,
+    AnswerSource, ClientCount, DomainCount, ErrorReport, ObservedClient, QueryLogEntry,
+    QueryOutcome, QueryPage, Stats, StatsWindow, TimeRange, TimelineBucket,
 };
 use duckdb::{Connection, Row, params};
 use hickory_proto::op::ResponseCode;
@@ -19,9 +19,12 @@ const MINUTE_MS: i64 = 60_000;
 #[derive(Debug, Default)]
 pub struct QueryFilter {
     pub client: Option<IpAddr>,
-    /// Matches every domain containing this text, case-insensitively.
+    /// Case-insensitive; `domain_exact` switches from substring to whole-name matching.
     pub domain: Option<String>,
     pub status: Option<QueryStatus>,
+    pub domain_exact: bool,
+    pub servfail: bool,
+    pub range: Option<TimeRange>,
 }
 
 pub struct QueryReader {
@@ -117,6 +120,7 @@ impl QueryReader {
 
         Ok(Stats {
             window,
+            range: timeline.range(),
             total_queries,
             failed_queries,
             cached_queries,
@@ -139,15 +143,34 @@ impl QueryReader {
     ) -> Result<QueryPage, StoreError> {
         let connection = self.connection.lock().expect("query reader lock poisoned");
         let client = filter.client.map(|client| client.to_string());
-        let domain = filter.domain.as_ref().map(|domain| domain.to_lowercase());
+        let domain = filter.domain.as_ref().map(|domain| {
+            let mut domain = domain.to_lowercase();
+            if filter.domain_exact && !domain.ends_with('.') {
+                domain.push('.');
+            }
+            domain
+        });
         let status = filter.status.map(QueryStatus::name);
+        let from_ms = filter.range.map(|range| range.from_ms as i64);
+        let until_ms = filter.range.map(|range| range.until_ms as i64);
         const MATCHES_FILTER: &str = "($1 IS NULL OR client = $1)
-            AND ($2 IS NULL OR contains(domain, $2))
-            AND ($3 IS NULL OR status = $3)";
+            AND ($2 IS NULL OR CASE WHEN $4 THEN domain = $2 ELSE contains(domain, $2) END)
+            AND ($3 IS NULL OR status = $3)
+            AND ($5 IS NULL OR timestamp_ms >= $5)
+            AND ($6 IS NULL OR timestamp_ms <= $6)
+            AND (NOT $7 OR response_code = 'SERVFAIL')";
 
         let total = connection.query_row(
             &format!("SELECT count(*) FROM queries WHERE {MATCHES_FILTER}"),
-            params![client, domain, status],
+            params![
+                client,
+                domain,
+                status,
+                filter.domain_exact,
+                from_ms,
+                until_ms,
+                filter.servfail
+            ],
             |row| row.get(0),
         )?;
 
@@ -156,15 +179,56 @@ impl QueryReader {
                     status, upstream, error, latency_us, blocked_by, error_code
              FROM queries WHERE {MATCHES_FILTER}
              ORDER BY timestamp_ms DESC, rowid DESC
-             LIMIT $4 OFFSET $5"
+             LIMIT $8 OFFSET $9"
         ))?;
-        let mut rows = statement.query(params![client, domain, status, limit, offset])?;
+        let mut rows = statement.query(params![
+            client,
+            domain,
+            status,
+            filter.domain_exact,
+            from_ms,
+            until_ms,
+            filter.servfail,
+            limit,
+            offset
+        ])?;
         let mut entries = Vec::new();
         while let Some(row) = rows.next()? {
             entries.push(log_entry(row)?);
         }
-        Ok(QueryPage { entries, total })
+        Ok(QueryPage {
+            range: filter.range,
+            entries,
+            total,
+        })
     }
+
+    pub fn clients(&self, range: TimeRange) -> Result<Vec<ObservedClient>, StoreError> {
+        let connection = self.connection.lock().expect("query reader lock poisoned");
+        let mut statement = connection.prepare(
+            "SELECT client, count(*) AS queries, max(timestamp_ms)
+             FROM queries WHERE timestamp_ms BETWEEN $1 AND $2
+             GROUP BY client ORDER BY queries DESC, client LIMIT 1000",
+        )?;
+        let mut rows = statement.query(params![range.from_ms as i64, range.until_ms as i64])?;
+        let mut clients = Vec::new();
+        while let Some(row) = rows.next()? {
+            let address: String = row.get(0)?;
+            clients.push(ObservedClient {
+                client: address.parse().map_err(|_| {
+                    StoreError::InvalidRow(format!("client {address:?} is not an IP address"))
+                })?,
+                name: None,
+                queries: row.get(1)?,
+                last_seen_ms: row.get(2)?,
+            });
+        }
+        Ok(clients)
+    }
+}
+
+pub fn time_range(window: StatsWindow, until: SystemTime) -> TimeRange {
+    Timeline::ending_at(window, unix_ms(until)).range()
 }
 
 /// The buckets of a stats window: whole buckets, the last one containing now.
@@ -188,6 +252,13 @@ impl Timeline {
             last_ms: now_ms,
             bucket_ms,
             buckets,
+        }
+    }
+
+    fn range(&self) -> TimeRange {
+        TimeRange {
+            from_ms: self.first_ms.max(0) as u64,
+            until_ms: self.last_ms.max(0) as u64,
         }
     }
 
@@ -447,6 +518,86 @@ mod tests {
         assert_eq!(hour.total_queries, 1);
         assert_eq!((day.total_queries, day.timeline.len()), (2, 96));
         assert_eq!((week.total_queries, week.timeline.len()), (2, 84));
+    }
+
+    #[test]
+    fn failure_drilldown_includes_forwarded_servfail_not_only_transport_errors() {
+        let reader = reader_with(&[
+            event(
+                at(NOW),
+                [10, 0, 0, 1],
+                "servfail.example.",
+                answered(ResponseCode::ServFail),
+            ),
+            event(at(NOW), [10, 0, 0, 1], "timeout.example.", failed()),
+            event(at(NOW), [10, 0, 0, 1], "ok.example.", cached()),
+        ]);
+        let stats = reader.stats(StatsWindow::LastHour, at(NOW)).unwrap();
+        let page = reader
+            .queries(
+                &QueryFilter {
+                    servfail: true,
+                    range: Some(stats.range),
+                    ..QueryFilter::default()
+                },
+                50,
+                0,
+            )
+            .unwrap();
+        assert_eq!(page.total, stats.failed_queries);
+        assert_eq!(page.total, 2);
+    }
+
+    #[test]
+    fn time_filters_match_statistics_boundaries_and_exact_domain_drilldown() {
+        let range = time_range(StatsWindow::LastHour, at(NOW));
+        let first = range.from_ms / 1000;
+        let reader = reader_with(&[
+            event(at(first - 1), [10, 0, 0, 1], "a.example.", cached()),
+            event(at(first), [10, 0, 0, 1], "a.example.", cached()),
+            event(at(NOW), [10, 0, 0, 2], "a.example.", blocked()),
+            event(at(NOW), [10, 0, 0, 2], "other.a.example.", cached()),
+            event(at(NOW + 1), [10, 0, 0, 3], "a.example.", cached()),
+        ]);
+        for window in StatsWindow::ALL {
+            let stats = reader.stats(window, at(NOW)).unwrap();
+            let page = reader
+                .queries(
+                    &QueryFilter {
+                        range: Some(stats.range),
+                        ..QueryFilter::default()
+                    },
+                    50,
+                    0,
+                )
+                .unwrap();
+            assert_eq!(page.total, stats.total_queries);
+            assert_eq!(page.range, Some(stats.range));
+        }
+        let filter = QueryFilter {
+            range: Some(range),
+            domain: Some("A.EXAMPLE.".into()),
+            domain_exact: true,
+            ..QueryFilter::default()
+        };
+        let page = reader.queries(&filter, 1, 0).unwrap();
+        assert_eq!(page.total, 2);
+        assert_eq!(page.entries.len(), 1);
+        let without_trailing_dot = QueryFilter {
+            domain: Some("a.example".into()),
+            ..filter
+        };
+        assert_eq!(
+            reader.queries(&without_trailing_dot, 50, 0).unwrap().total,
+            2
+        );
+        assert_eq!(reader.queries(&filter, 1, 1).unwrap().entries.len(), 1);
+        let clients = reader.clients(range).unwrap();
+        assert_eq!(clients.len(), 2);
+        assert_eq!(clients[0].client, IpAddr::from([10, 0, 0, 2]));
+        assert_eq!(clients[0].queries, 2);
+        assert_eq!(clients[0].last_seen_ms, NOW * 1000);
+        assert!(clients.iter().all(|client| client.name.is_none()));
     }
 
     #[test]

@@ -1,10 +1,15 @@
 //! HTTP API for the dashboard, plus the dashboard's static files.
 
-use std::{net::IpAddr, path::Path, sync::Arc, time::SystemTime};
+use std::{
+    net::IpAddr,
+    path::Path,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use api::{
-    BlocklistStatus, ErrorReport, LoginRequest, QueryPage, Stats, StatsWindow, SystemStatus,
-    UpstreamStatus,
+    BlocklistStatus, ErrorReport, LoginRequest, ObservedClient, QueryPage, Stats, StatsWindow,
+    SystemStatus, UpstreamStatus,
 };
 use axum::{
     Json, Router,
@@ -26,7 +31,7 @@ use crate::{
     metrics::{self, Metrics},
     outcome::QueryStatus,
     process,
-    query_store::{QueryFilter, QueryReader, QueryRecorder, StoreError},
+    query_store::{QueryFilter, QueryReader, QueryRecorder, StoreError, time_range},
     upstream::UpstreamPool,
 };
 
@@ -55,8 +60,10 @@ pub fn router(state: AppState, dashboard_dir: &Path) -> Router {
         .route("/api/logout", post(logout))
         .route("/api/stats", get(stats))
         .route("/api/queries", get(queries))
+        .route("/api/clients", get(clients))
         .route("/api/upstreams", get(upstream_status))
         .route("/api/blocklists", get(blocklist_status))
+        .route("/api/blocklists/refresh", post(refresh_blocklists))
         .route("/api/system", get(system_status))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -182,14 +189,32 @@ fn query_status(status: api::QueryStatus) -> QueryStatus {
 struct StatsParams {
     #[serde(default)]
     window: StatsWindow,
+    until_ms: Option<u64>,
+}
+
+fn requested_until(until_ms: Option<u64>) -> Result<SystemTime, ApiError> {
+    let now = SystemTime::now();
+    let Some(until_ms) = until_ms else {
+        return Ok(now);
+    };
+    let until = UNIX_EPOCH.checked_add(Duration::from_millis(until_ms));
+    match until {
+        Some(until) if until <= now && until_ms <= i64::MAX as u64 => Ok(until),
+        _ => Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "invalid_time_range",
+            message: "The end of the query range must be a valid time in the past. Reset the filters to return to live data.",
+        }),
+    }
 }
 
 async fn stats(
     State(state): State<AppState>,
     Query(params): Query<StatsParams>,
 ) -> Result<Json<Stats>, ApiError> {
+    let until = requested_until(params.until_ms)?;
     let reader = state.query_reader.clone();
-    let Json(mut stats) = read(move || reader.stats(params.window, SystemTime::now())).await?;
+    let Json(mut stats) = read(move || reader.stats(params.window, until)).await?;
     let names = state
         .client_names
         .names_of(stats.clients.iter().map(|count| count.client))
@@ -200,12 +225,43 @@ async fn stats(
     Ok(Json(stats))
 }
 
+async fn clients(
+    State(state): State<AppState>,
+    Query(params): Query<StatsParams>,
+) -> Result<Json<Vec<ObservedClient>>, ApiError> {
+    let range = time_range(params.window, requested_until(params.until_ms)?);
+    let reader = state.query_reader.clone();
+    let Json(mut clients) = read(move || reader.clients(range)).await?;
+    let names = state
+        .client_names
+        .names_of(clients.iter().map(|client| client.client))
+        .await;
+    for (client, name) in clients.iter_mut().zip(names) {
+        client.name = name;
+    }
+    Ok(Json(clients))
+}
+
 async fn upstream_status(State(state): State<AppState>) -> Json<Vec<UpstreamStatus>> {
     Json(state.upstreams.status())
 }
 
 async fn blocklist_status(State(state): State<AppState>) -> Json<Vec<BlocklistStatus>> {
     Json(state.blocker.status())
+}
+
+async fn refresh_blocklists(
+    State(state): State<AppState>,
+    Json(()): Json<()>,
+) -> Result<Json<Vec<BlocklistStatus>>, ApiError> {
+    if !state.blocker.refresh_now().await {
+        return Err(ApiError {
+            status: StatusCode::CONFLICT,
+            code: "list_refresh_running",
+            message: "A list refresh is already running. Check the list status shortly.",
+        });
+    }
+    Ok(Json(state.blocker.status()))
 }
 
 async fn system_status() -> Json<SystemStatus> {
@@ -222,17 +278,41 @@ struct QueriesParams {
     client: Option<IpAddr>,
     domain: Option<String>,
     status: Option<api::QueryStatus>,
+    #[serde(default)]
+    domain_exact: bool,
+    #[serde(default)]
+    servfail: bool,
+    window: Option<StatsWindow>,
+    until_ms: Option<u64>,
 }
 
 async fn queries(
     State(state): State<AppState>,
     Query(params): Query<QueriesParams>,
 ) -> Result<Json<QueryPage>, ApiError> {
+    let until = requested_until(params.until_ms)?;
+    if params.until_ms.is_some() && params.window.is_none() {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "invalid_time_range",
+            message: "A snapshot cutoff requires a window: 1h, 24h or 7d.",
+        });
+    }
+    if params.offset > i64::MAX as usize {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "invalid_offset",
+            message: "The query offset is too large. Reset the filters.",
+        });
+    }
     let limit = params.limit.unwrap_or(100).min(MAX_QUERIES_PER_REQUEST);
     let filter = QueryFilter {
         client: params.client,
         domain: params.domain,
         status: params.status.map(query_status),
+        domain_exact: params.domain_exact,
+        servfail: params.servfail,
+        range: params.window.map(|window| time_range(window, until)),
     };
     let reader = state.query_reader.clone();
     let Json(mut page) = read(move || reader.queries(&filter, limit, params.offset)).await?;
@@ -274,6 +354,21 @@ mod tests {
     use axum::http::HeaderValue;
 
     use super::*;
+
+    #[test]
+    fn rejects_future_and_overflowing_snapshot_times() {
+        assert!(requested_until(None).is_ok());
+        assert!(requested_until(Some(1_000)).is_ok());
+        assert!(requested_until(Some(u64::MAX)).is_err());
+        let future = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+            + 60_000;
+        let error = requested_until(Some(future)).err().unwrap();
+        assert_eq!(error.code, "invalid_time_range");
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    }
 
     #[test]
     fn finds_the_session_cookie_among_others() {

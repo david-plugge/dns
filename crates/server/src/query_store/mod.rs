@@ -16,7 +16,7 @@ use std::{
 use duckdb::{Config, Connection};
 use hickory_proto::rr::RecordType;
 
-pub use reader::{QueryFilter, QueryReader};
+pub use reader::{QueryFilter, QueryReader, time_range};
 pub use writer::{QueryRecorder, QueryWriter};
 
 use crate::{error::ErrorCode, outcome::QueryOutcome};

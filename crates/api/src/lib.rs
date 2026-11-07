@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Stats {
     pub window: StatsWindow,
+    pub range: TimeRange,
     pub total_queries: u64,
     pub failed_queries: u64,
     pub cached_queries: u64,
@@ -70,9 +71,25 @@ pub struct DomainCount {
     pub queries: u64,
 }
 
+/// Inclusive server-time bounds in milliseconds since the Unix epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimeRange {
+    pub from_ms: u64,
+    pub until_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ObservedClient {
+    pub client: IpAddr,
+    pub name: Option<String>,
+    pub queries: u64,
+    pub last_seen_ms: u64,
+}
+
 /// One page of the query log, newest first.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QueryPage {
+    pub range: Option<TimeRange>,
     pub entries: Vec<QueryLogEntry>,
     /// Number of queries matching the filter, across all pages.
     pub total: u64,
