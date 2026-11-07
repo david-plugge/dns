@@ -34,6 +34,13 @@ input.invalid { border-color: var(--danger); }
 .window-picker { display: flex; gap: 0.25rem; }
 .window-picker button.active { border-color: var(--accent); color: var(--accent); }
 
+.blocking-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; }
+.blocking-controls input { width: 5rem; }
+.device-picker { display: grid; gap: 0.5rem; margin-top: 1rem; border: 1px solid var(--border); border-radius: 6px; max-height: 16rem; overflow: auto; }
+.device-picker label { display: flex; align-items: center; gap: 0.5rem; overflow-wrap: anywhere; }
+.pause-status { color: var(--warning); overflow-wrap: anywhere; }
+.blocking-panel > button { margin-bottom: 1rem; }
+
 .login { display: grid; gap: 0.75rem; max-width: 320px; margin: 4rem auto; }
 .login h2, .login p { margin: 0; }
 p.failed { color: var(--danger); }

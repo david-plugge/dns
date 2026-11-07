@@ -35,6 +35,23 @@ impl QueryReader {
         }
     }
 
+    pub fn devices(&self) -> Result<Vec<api::Device>, StoreError> {
+        let connection = self.connection.lock().expect("query reader lock poisoned");
+        let mut statement =
+            connection.prepare("SELECT DISTINCT client FROM queries ORDER BY client")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        rows.map(|row| {
+            let client = row?;
+            Ok(api::Device {
+                client: client.parse().map_err(|_| {
+                    StoreError::InvalidRow(format!("client {client:?} is not an IP address"))
+                })?,
+                name: None,
+            })
+        })
+        .collect()
+    }
+
     pub fn stats(&self, window: StatsWindow, now: SystemTime) -> Result<Stats, StoreError> {
         let connection = self.connection.lock().expect("query reader lock poisoned");
         let timeline = Timeline::ending_at(window, unix_ms(now));
@@ -447,6 +464,27 @@ mod tests {
         assert_eq!(hour.total_queries, 1);
         assert_eq!((day.total_queries, day.timeline.len()), (2, 96));
         assert_eq!((week.total_queries, week.timeline.len()), (2, 84));
+    }
+
+    #[test]
+    fn device_picker_includes_all_distinct_clients_not_only_the_top_ten() {
+        let events: Vec<_> = (1..=12)
+            .flat_map(|client| {
+                [
+                    event(at(NOW), [10, 0, 0, client], "a.example.", cached()),
+                    event(at(NOW), [10, 0, 0, client], "b.example.", cached()),
+                ]
+            })
+            .collect();
+        let devices = reader_with(&events).devices().unwrap();
+        assert_eq!(devices.len(), 12);
+        for client in 1..=12 {
+            assert!(
+                devices
+                    .iter()
+                    .any(|device| device.client == IpAddr::from([10, 0, 0, client]))
+            );
+        }
     }
 
     #[test]

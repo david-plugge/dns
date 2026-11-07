@@ -4,6 +4,31 @@ use std::net::IpAddr;
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "scope", content = "clients", rename_all = "snake_case")]
+pub enum BlockingScope {
+    All,
+    Clients(Vec<IpAddr>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PauseBlockingRequest {
+    pub duration_seconds: u64,
+    pub target: BlockingScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BlockingPause {
+    pub target: BlockingScope,
+    pub until_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Device {
+    pub client: IpAddr,
+    pub name: Option<String>,
+}
+
 /// Aggregated statistics over the most recent time window.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Stats {

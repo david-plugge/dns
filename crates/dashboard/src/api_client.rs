@@ -71,6 +71,26 @@ pub async fn logout() -> Result<(), FetchError> {
     Ok(())
 }
 
+pub async fn fetch_devices() -> Result<Vec<api::Device>, FetchError> {
+    get_json("/api/devices").await
+}
+
+pub async fn fetch_blocking_pause() -> Result<Option<api::BlockingPause>, FetchError> {
+    get_json("/api/blocking/pause").await
+}
+
+pub async fn pause_blocking(request: api::PauseBlockingRequest) -> Result<(), FetchError> {
+    let url = "/api/blocking/pause";
+    send(url, Request::post(url).json(&request)).await?;
+    Ok(())
+}
+
+pub async fn resume_blocking() -> Result<(), FetchError> {
+    let url = "/api/blocking/pause";
+    send(url, Request::delete(url).build()).await?;
+    Ok(())
+}
+
 pub async fn fetch_stats(window: StatsWindow) -> Result<Stats, FetchError> {
     get_json(&format!("/api/stats?window={}", window.as_str())).await
 }
