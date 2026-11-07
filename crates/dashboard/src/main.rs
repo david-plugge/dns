@@ -1,4 +1,5 @@
 mod api_client;
+mod blocking;
 mod blocklists;
 mod charts;
 mod format;
@@ -222,6 +223,7 @@ fn DashboardPage(page_visible: ReadSignal<bool>, on_logged_out: EventHandler<()>
             for message in [logout_error(), stats_error(), status_error(), log_error()].into_iter().flatten() {
                 div { class: "error-banner", role: "alert", "{message}" }
             }
+            blocking::BlockingPanel { page_visible, on_logged_out }
             if let Some(status) = server_status() {
                 StatusPanel {
                     upstreams: status.upstreams,

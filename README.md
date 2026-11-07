@@ -87,6 +87,13 @@ empty answer. Downloaded lists are kept in `DNS_BLOCKLIST_CACHE_DIR`, so blockin
 from the first query after a restart, even without internet access. List hosts are resolved
 through the configured upstreams, not the system resolver.
 
+The dashboard can pause blocking for all devices or selected client IP addresses for
+1–1440 minutes, and resume it early. A new pause replaces the previous one. Pauses expire
+on the server even with the dashboard closed and are cleared on restart. The device picker
+includes every address in the retained query log; select all addresses used by a device.
+If a router forwards DNS on behalf of devices, only the router's address is visible.
+Answers already cached by devices remain valid until their TTL expires.
+
 ## Dashboard login and metrics
 
 The dashboard and `/api/*` require logging in with the master password. Sessions are kept in

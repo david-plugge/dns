@@ -164,7 +164,12 @@ impl RequestHandler for ForwardingHandler {
 
         // Lowercase, so clients randomizing the case (DNS 0x20) do not split the statistics.
         let domain = info.query.name().to_lowercase().to_string();
-        let (response_info, outcome) = match self.blocker.blocked_by(&domain) {
+        let blocked_by = if self.blocker.pauses.includes(info.src.ip()) {
+            None
+        } else {
+            self.blocker.blocked_by(&domain)
+        };
+        let (response_info, outcome) = match blocked_by {
             Some(list) => (
                 reply_blocked(request, self.blocked_ttl, response_handle).await,
                 QueryOutcome::Blocked { list },

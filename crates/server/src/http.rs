@@ -58,6 +58,13 @@ pub fn router(state: AppState, dashboard_dir: &Path) -> Router {
         .route("/api/upstreams", get(upstream_status))
         .route("/api/blocklists", get(blocklist_status))
         .route("/api/system", get(system_status))
+        .route("/api/devices", get(devices))
+        .route(
+            "/api/blocking/pause",
+            get(blocking_pause)
+                .post(pause_blocking)
+                .delete(resume_blocking),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_session,
@@ -206,6 +213,44 @@ async fn upstream_status(State(state): State<AppState>) -> Json<Vec<UpstreamStat
 
 async fn blocklist_status(State(state): State<AppState>) -> Json<Vec<BlocklistStatus>> {
     Json(state.blocker.status())
+}
+
+async fn devices(State(state): State<AppState>) -> Result<Json<Vec<api::Device>>, ApiError> {
+    let reader = state.query_reader.clone();
+    let Json(mut devices) = read(move || reader.devices()).await?;
+    let names = state
+        .client_names
+        .names_of(devices.iter().map(|device| device.client))
+        .await;
+    for (device, name) in devices.iter_mut().zip(names) {
+        device.name = name;
+    }
+    Ok(Json(devices))
+}
+
+async fn blocking_pause(State(state): State<AppState>) -> Json<Option<api::BlockingPause>> {
+    Json(state.blocker.pauses.status())
+}
+
+async fn pause_blocking(
+    State(state): State<AppState>,
+    Json(request): Json<api::PauseBlockingRequest>,
+) -> Result<Json<api::BlockingPause>, ApiError> {
+    state
+        .blocker
+        .pauses
+        .set(request)
+        .map(Json)
+        .map_err(|message| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "invalid_blocking_pause",
+            message,
+        })
+}
+
+async fn resume_blocking(State(state): State<AppState>) -> StatusCode {
+    state.blocker.pauses.clear();
+    StatusCode::NO_CONTENT
 }
 
 async fn system_status() -> Json<SystemStatus> {

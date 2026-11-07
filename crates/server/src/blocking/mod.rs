@@ -6,6 +6,7 @@
 
 mod blocklist;
 mod download;
+mod pause;
 mod rules;
 mod source;
 mod state;
@@ -42,6 +43,7 @@ pub struct BlockingConfig {
 }
 
 pub struct Blocker {
+    pub pauses: pause::Pauses,
     sources: Vec<ListSource>,
     cache_dir: PathBuf,
     refresh_interval: Duration,
@@ -96,6 +98,7 @@ impl Blocker {
         let states = sources.iter().map(|_| SourceState::default()).collect();
 
         Self {
+            pauses: pause::Pauses::default(),
             sources,
             cache_dir: config.cache_dir,
             refresh_interval: config.refresh_interval,
