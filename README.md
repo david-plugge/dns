@@ -41,7 +41,8 @@ Filters, period, page and a frozen log's cutoff are kept in the URL, not browser
 These URLs contain client addresses and domain searches; treat shared links accordingly.
 The client filter suggests observed devices by name or IP and shows both after selection.
 Enter a full device name and press Enter, or choose a suggestion; duplicate names require
-selecting a specific IP. Shared URLs retain the IP rather than the device name.
+selecting a specific IP. Typed IP addresses are applied on Enter or when the field loses focus.
+Shared URLs retain the IP rather than the device name.
 The client inventory is derived from retained queries (up to 1,000 addresses per selected
 period), so it is not permanent and cannot identify devices hidden behind a forwarding router.
 
@@ -51,12 +52,14 @@ existing sources and updates the existing list cache without editing configurati
 download can leave previously loaded rules active; the list table reports retained rules and
 errors separately. No new persistent state or configuration store is introduced.
 
-The optional filter-layout regression requires Node.js and Playwright with Chromium. It checks
-that pending filter requests do not collapse the table or move the viewport:
+The optional browser regressions require Node.js and Playwright with Chromium. They check
+stable filter layout, sequential IP entry, combined filters, and URL history:
 
 ```sh
-DNS_DASHBOARD_URL=http://127.0.0.1:18153 DNS_PASSWORD='<local-dashboard-password>' \
-  node crates/dashboard/tests/filter-layout.cjs
+export DNS_DASHBOARD_URL=http://127.0.0.1:18153
+export DNS_PASSWORD='<local-dashboard-password>'
+node crates/dashboard/tests/filter-layout.cjs
+node crates/dashboard/tests/client-filters.cjs
 ```
 
 Set `PLAYWRIGHT_MODULE` to the module path if Playwright is installed outside Node's search path.

@@ -3,20 +3,20 @@ use std::net::IpAddr;
 use api::ObservedClient;
 use dioxus::prelude::*;
 
-use crate::{components::input::Input, view::ViewState};
+use crate::components::input::Input;
 
 #[component]
 pub fn ClientFilter(
-    mut view: Signal<ViewState>,
+    client: Option<IpAddr>,
     clients: Vec<ObservedClient>,
     reset: u64,
+    on_select: EventHandler<Option<IpAddr>>,
 ) -> Element {
     let mut text = use_signal(String::new);
     let mut applied = use_signal(|| (None::<IpAddr>, String::new(), reset));
     let mut feedback = use_signal(|| ClientMatch::All);
     let known_clients = clients.clone();
-    use_effect(use_reactive!(|(known_clients, reset)| {
-        let client = view().client;
+    use_effect(use_reactive!(|(known_clients, reset, client)| {
         let label = client
             .map(|ip| client_label(ip, &known_clients))
             .unwrap_or_default();
@@ -42,10 +42,7 @@ pub fn ClientFilter(
                 ClientMatch::Client(ip) => Some(ip),
                 ClientMatch::Choose | ClientMatch::Unknown => return,
             };
-            view.with_mut(|query| {
-                query.client = client;
-                query.offset = 0;
-            });
+            on_select.call(client);
         }
     });
 
@@ -63,8 +60,12 @@ pub fn ClientFilter(
                     let clients = clients.clone();
                     move |event: FormEvent| {
                         let value = event.value();
+                        if value.trim().parse::<IpAddr>().is_ok() {
+                            text.set(value);
+                            feedback.set(ClientMatch::All);
+                            return;
+                        }
                         if let ClientMatch::Client(ip) = match_client(&value, &clients)
-                            && value.trim().parse::<IpAddr>().is_err()
                             && !client_label(ip, &clients).eq_ignore_ascii_case(value.trim())
                         {
                             text.set(value);

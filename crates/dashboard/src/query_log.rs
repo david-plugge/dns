@@ -95,9 +95,16 @@ pub fn QueryLog(
         }
         div { class: "log-filters",
             ClientFilter {
-                view,
+                client: query.client,
                 clients: clients.clone(),
                 reset: client_filter_reset(),
+                on_select: move |client| {
+                    commit_domain.call(());
+                    view.with_mut(|query| {
+                        query.client = client;
+                        query.offset = 0;
+                    });
+                },
             }
             div { class: "domain-filter",
                 select {

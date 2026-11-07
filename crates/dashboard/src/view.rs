@@ -23,9 +23,6 @@ impl ViewState {
         let mut view: Self =
             serde_urlencoded::from_str(search.trim_start_matches('?')).unwrap_or_default();
         view.domain = view.domain.filter(|domain| !domain.trim().is_empty());
-        if view.domain.is_none() {
-            view.domain_exact = false;
-        }
         view
     }
 
@@ -147,7 +144,15 @@ mod tests {
             ViewState::from_search("?client=invalid&window=bad"),
             ViewState::default()
         );
-        assert!(!ViewState::from_search("?domain=&domain_exact=true").domain_exact);
+    }
+
+    #[test]
+    fn empty_domain_mode_roundtrips_without_affecting_queries() {
+        let empty_exact = ViewState::from_search("?domain=&domain_exact=true");
+        assert_eq!(empty_exact.domain, None);
+        assert!(empty_exact.domain_exact);
+        assert!(!empty_exact.query_state().domain_exact);
+        assert_eq!(ViewState::from_search(&empty_exact.search()), empty_exact);
     }
 
     #[test]
