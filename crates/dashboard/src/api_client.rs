@@ -1,14 +1,14 @@
 //! Fetches data from the server's HTTP API.
 
-use std::net::IpAddr;
-
 use api::{
-    BlocklistStatus, ErrorReport, LoginRequest, QueryPage, QueryStatus, Stats, StatsWindow,
+    BlocklistStatus, ErrorReport, LoginRequest, ObservedClient, QueryPage, Stats, StatsWindow,
     SystemStatus, UpstreamStatus,
 };
 use futures_util::future::try_join3;
 use gloo_net::http::{Request, Response};
 use serde::de::DeserializeOwned;
+
+use crate::view::ViewState;
 
 pub const PAGE_SIZE: usize = 50;
 const SESSION_REQUIRED: &str = "session_required";
@@ -97,23 +97,46 @@ pub async fn fetch_server_status() -> Result<ServerStatus, FetchError> {
     })
 }
 
-/// Which part of the query log to show.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct LogQuery {
-    pub client: Option<IpAddr>,
-    pub domain: Option<String>,
-    pub status: Option<QueryStatus>,
-    pub offset: usize,
-}
-
 /// The offset of the last page that holds any of `total` queries.
 pub fn last_page_offset(total: u64) -> usize {
     let last_index = usize::try_from(total.saturating_sub(1)).unwrap_or(usize::MAX);
     last_index / PAGE_SIZE * PAGE_SIZE
 }
 
-pub async fn fetch_queries(query: &LogQuery) -> Result<QueryPage, FetchError> {
-    let mut url = format!("/api/queries?limit={PAGE_SIZE}&offset={}", query.offset);
+pub async fn refresh_blocklists() -> Result<Vec<BlocklistStatus>, FetchError> {
+    let url = "/api/blocklists/refresh";
+    let response = send(url, Request::post(url).json(&())).await?;
+    response
+        .json()
+        .await
+        .map_err(|error| FetchError::Failed(format!("Unexpected list refresh response: {error}")))
+}
+
+pub async fn fetch_clients(
+    window: StatsWindow,
+    until_ms: u64,
+) -> Result<Vec<ObservedClient>, FetchError> {
+    get_json(&format!(
+        "/api/clients?window={}&until_ms={until_ms}",
+        window.as_str()
+    ))
+    .await
+}
+
+pub async fn fetch_queries(
+    query: &ViewState,
+    until_ms: Option<u64>,
+) -> Result<QueryPage, FetchError> {
+    let mut url = format!(
+        "/api/queries?limit={PAGE_SIZE}&offset={}&window={}&domain_exact={}",
+        query.offset,
+        query.window.as_str(),
+        query.domain_exact
+    );
+    url += &format!("&servfail={}", query.servfail);
+    if let Some(until) = query.until_ms.or(until_ms) {
+        url += &format!("&until_ms={until}");
+    }
     if let Some(client) = query.client {
         url += &format!("&client={client}");
     }

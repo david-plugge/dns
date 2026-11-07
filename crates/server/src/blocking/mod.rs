@@ -49,6 +49,7 @@ pub struct Blocker {
     current: RwLock<Arc<Blocklist>>,
     /// One entry per source, in the same order.
     states: Mutex<Vec<SourceState>>,
+    refresh_lock: tokio::sync::Mutex<()>,
 }
 
 struct ListSource {
@@ -102,6 +103,7 @@ impl Blocker {
             downloader,
             current: RwLock::new(Arc::new(Blocklist::default())),
             states: Mutex::new(states),
+            refresh_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -154,12 +156,31 @@ impl Blocker {
     /// Downloads URL lists whose cached copy is stale and rebuilds the blocklist if any list
     /// changed.
     async fn refresh(self: &Arc<Self>) {
+        self.refresh_sources(false).await;
+    }
+
+    pub async fn refresh_now(self: &Arc<Self>) -> bool {
+        self.refresh_sources(true).await
+    }
+
+    async fn refresh_sources(self: &Arc<Self>, force: bool) -> bool {
+        let Ok(_refresh) = self.refresh_lock.try_lock() else {
+            return false;
+        };
         let probes: Vec<Probe> = self
             .sources
             .iter()
             .map(|source| self.probe(source))
             .collect();
-        let due = {
+        let due = if force {
+            self.sources
+                .iter()
+                .enumerate()
+                .filter_map(|(index, source)| {
+                    matches!(source.content, SourceContent::Location(_)).then_some(index)
+                })
+                .collect()
+        } else {
             let states = self.states.lock().expect("status lock poisoned");
             due_sources(&probes, &states, self.refresh_interval)
         };
@@ -183,7 +204,7 @@ impl Blocker {
 
         if changed {
             self.rebuild(download_errors).await;
-            return;
+            return true;
         }
         let mut states = self.states.lock().expect("status lock poisoned");
         for (state, error) in states.iter_mut().zip(download_errors) {
@@ -191,6 +212,7 @@ impl Blocker {
                 state.last_error = Some(error);
             }
         }
+        true
     }
 
     fn probe(&self, source: &ListSource) -> Probe {
@@ -431,6 +453,27 @@ mod tests {
             .map(|status| status.domains)
             .collect();
         assert_eq!(domains, [2, 1, 1, 1]);
+    }
+
+    #[tokio::test]
+    async fn manual_refresh_reloads_sources_and_rejects_overlapping_work() {
+        let dir = temp_dir("manual-refresh");
+        let file = dir.join("list.txt");
+        std::fs::write(&file, "first.example\n").unwrap();
+        let blocker = blocker(BlockingConfig {
+            blocklists: vec![ListLocation::File(file.clone())],
+            ..config(&dir)
+        });
+        blocker.load().await;
+        assert!(blocker.blocked_by("first.example.").is_some());
+        std::fs::write(&file, "second.example\n").unwrap();
+        let guard = blocker.refresh_lock.lock().await;
+        assert!(!blocker.refresh_now().await);
+        drop(guard);
+        assert!(blocker.refresh_now().await);
+        assert!(blocker.blocked_by("first.example.").is_none());
+        assert!(blocker.blocked_by("second.example.").is_some());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
